@@ -36,6 +36,9 @@ VkResult VulkanExampleBase::createInstance(bool enableValidation)
 	// Enable surface extensions depending on os
 #if defined(_WIN32)
 	instanceExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+	// Add Instance extensions for full screen exclusive
+	instanceExtensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+	instanceExtensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
 #elif defined(VK_USE_PLATFORM_ANDROID_KHR)
 	instanceExtensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
 #elif defined(_DIRECT2DISPLAY)
@@ -778,7 +781,7 @@ VulkanExampleBase::VulkanExampleBase(bool enableValidation)
 	commandLineParser.add("help", { "--help" }, 0, "Show help");
 	commandLineParser.add("validation", { "-v", "--validation" }, 0, "Enable validation layers");
 	commandLineParser.add("vsync", { "-vs", "--vsync" }, 0, "Enable V-Sync");
-	commandLineParser.add("fullscreen", { "-f", "--fullscreen" }, 0, "Start in fullscreen mode");
+	commandLineParser.add("windowedfullscreen", { "-f", "--windowedfullscreen" }, 0, "Start in windowedfullscreen mode");
 	commandLineParser.add("width", { "-w", "--width" }, 1, "Set window width");
 	commandLineParser.add("height", { "-h", "--height" }, 1, "Set window height");
 	commandLineParser.add("shaders", { "-s", "--shaders" }, 1, "Select shader type to use (glsl or hlsl)");
@@ -812,8 +815,8 @@ VulkanExampleBase::VulkanExampleBase(bool enableValidation)
 	if (commandLineParser.isSet("width")) {
 		width = commandLineParser.getValueAsInt("width", width);
 	}
-	if (commandLineParser.isSet("fullscreen")) {
-		settings.fullscreen = true;
+	if (commandLineParser.isSet("windowedfullscreen")) {
+		settings.windowedfullscreen = true;
 	}
 	if (commandLineParser.isSet("shaders")) {
 		std::string value = commandLineParser.getValueAsString("shaders", "glsl");
@@ -1033,11 +1036,32 @@ bool VulkanExampleBase::initVulkan()
 	// Derived examples can enable extensions based on the list of supported extensions read from the physical device
 	getEnabledExtensions();
 
-	VkResult res = vulkanDevice->createLogicalDevice(enabledFeatures, enabledDeviceExtensions, deviceCreatepNextChain);
-	if (res != VK_SUCCESS) {
-		vks::tools::exitFatal("Could not create Vulkan device: \n" + vks::tools::errorString(res), res);
-		return false;
+	if (settings.fullscreen) 
+	{
+		enabledDeviceExtensions.push_back(VK_EXT_FULL_SCREEN_EXCLUSIVE_EXTENSION_NAME);
+		VkResult res = vulkanDevice->createLogicalDevice(enabledFeatures, enabledDeviceExtensions, deviceCreatepNextChain);
+		if (res != VK_SUCCESS) 
+		{
+			vks::tools::exitFatal("Could not create Vulkan device: Not Support FullScreen Exclusive.\n" + vks::tools::errorString(res), res);
+			enabledDeviceExtensions.pop_back();
+			res = vulkanDevice->createLogicalDevice(enabledFeatures, enabledDeviceExtensions, deviceCreatepNextChain);
+			if (res != VK_SUCCESS) 
+			{
+				vks::tools::exitFatal("Could not create Vulkan device: \n" + vks::tools::errorString(res), res);
+				return false;
+			}
+		}
+		else 
+		{
+			swapChain.isSupportFullscreenExclusive = true;
+		}
 	}
+	else
+	{
+		VK_CHECK_RESULT(vulkanDevice->createLogicalDevice(enabledFeatures, enabledDeviceExtensions, deviceCreatepNextChain));
+	}
+	//vsync
+	swapChain.imageCount = settings.vsync ? 2 : 3;
 	device = vulkanDevice->logicalDevice;
 
 	// Get a graphics queue from the device
@@ -1132,7 +1156,13 @@ HWND VulkanExampleBase::setupWindow(HINSTANCE hinstance, WNDPROC wndproc)
 	int screenWidth = GetSystemMetrics(SM_CXSCREEN);
 	int screenHeight = GetSystemMetrics(SM_CYSCREEN);
 
-	if (settings.fullscreen)
+	if (settings.windowedfullscreen)
+	{
+		width = GetSystemMetrics(SM_CXSCREEN);
+		height = GetSystemMetrics(SM_CYSCREEN);
+	}
+
+	if (settings.windowedfullscreen)
 	{
 		if ((width != (uint32_t)screenWidth) && (height != (uint32_t)screenHeight))
 		{
@@ -1147,7 +1177,7 @@ HWND VulkanExampleBase::setupWindow(HINSTANCE hinstance, WNDPROC wndproc)
 			{
 				if (MessageBox(NULL, "Fullscreen Mode not supported!\n Switch to window mode?", "Error", MB_YESNO | MB_ICONEXCLAMATION) == IDYES)
 				{
-					settings.fullscreen = false;
+					settings.windowedfullscreen = false;
 				}
 				else
 				{
@@ -1163,7 +1193,7 @@ HWND VulkanExampleBase::setupWindow(HINSTANCE hinstance, WNDPROC wndproc)
 	DWORD dwExStyle;
 	DWORD dwStyle;
 
-	if (settings.fullscreen)
+	if (settings.windowedfullscreen)
 	{
 		dwExStyle = WS_EX_APPWINDOW;
 		dwStyle = WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
@@ -1177,8 +1207,8 @@ HWND VulkanExampleBase::setupWindow(HINSTANCE hinstance, WNDPROC wndproc)
 	RECT windowRect;
 	windowRect.left = 0L;
 	windowRect.top = 0L;
-	windowRect.right = settings.fullscreen ? (long)screenWidth : (long)width;
-	windowRect.bottom = settings.fullscreen ? (long)screenHeight : (long)height;
+	windowRect.right = settings.windowedfullscreen ? (long)screenWidth : (long)width;
+	windowRect.bottom = settings.windowedfullscreen ? (long)screenHeight : (long)height;
 
 	AdjustWindowRectEx(&windowRect, dwStyle, FALSE, dwExStyle);
 
@@ -1196,7 +1226,7 @@ HWND VulkanExampleBase::setupWindow(HINSTANCE hinstance, WNDPROC wndproc)
 		hinstance,
 		NULL);
 
-	if (!settings.fullscreen)
+	if (!settings.windowedfullscreen)
 	{
 		// Center on screen
 		uint32_t x = (GetSystemMetrics(SM_CXSCREEN) - windowRect.right) / 2;
@@ -2932,7 +2962,7 @@ void VulkanExampleBase::initSwapchain()
 
 void VulkanExampleBase::setupSwapChain()
 {
-	swapChain.create(&width, &height, settings.vsync, settings.fullscreen);
+	swapChain.create(&width, &height, settings.vsync, settings.windowedfullscreen, settings.fullscreen);
 }
 
 void VulkanExampleBase::OnUpdateUIOverlay(vks::UIOverlay *overlay) {}

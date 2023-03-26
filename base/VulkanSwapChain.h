@@ -39,6 +39,7 @@ private:
 	VkDevice device;
 	VkPhysicalDevice physicalDevice;
 	VkSurfaceKHR surface;
+	HWND hwnd;
 	// Function pointers
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR fpGetPhysicalDeviceSurfaceSupportKHR;
 	PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fpGetPhysicalDeviceSurfaceCapabilitiesKHR; 
@@ -49,6 +50,8 @@ private:
 	PFN_vkGetSwapchainImagesKHR fpGetSwapchainImagesKHR;
 	PFN_vkAcquireNextImageKHR fpAcquireNextImageKHR;
 	PFN_vkQueuePresentKHR fpQueuePresentKHR;
+	PFN_vkAcquireFullScreenExclusiveModeEXT fpAcquireFullScreenExclusiveModeEXT;
+	//bool lost = true;
 public:
 	VkFormat colorFormat;
 	VkColorSpaceKHR colorSpace;
@@ -57,6 +60,7 @@ public:
 	std::vector<VkImage> images;
 	std::vector<SwapChainBuffer> buffers;
 	uint32_t queueNodeIndex = UINT32_MAX;
+	bool isSupportFullscreenExclusive = false;
 
 #if defined(VK_USE_PLATFORM_WIN32_KHR)
 	void initSurface(void* platformHandle, void* platformWindow);
@@ -77,8 +81,9 @@ public:
 #endif
 #endif
 	void connect(VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device);
-	void create(uint32_t* width, uint32_t* height, bool vsync = false, bool fullscreen = false);
+	void create(uint32_t* width, uint32_t* height, bool vsync = false, bool windowedfullscreen = false, bool exclusivefullscreen = false);
 	VkResult acquireNextImage(VkSemaphore presentCompleteSemaphore, uint32_t* imageIndex);
 	VkResult queuePresent(VkQueue queue, uint32_t imageIndex, VkSemaphore waitSemaphore = VK_NULL_HANDLE);
 	void cleanup();
+	//bool lost() const { return lost; }
 };

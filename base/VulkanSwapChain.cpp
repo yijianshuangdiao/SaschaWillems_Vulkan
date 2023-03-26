@@ -27,6 +27,7 @@ void VulkanSwapChain::initSurface(void* view)
 void VulkanSwapChain::initSurface(uint32_t width, uint32_t height)
 #endif
 {
+	hwnd = static_cast<HWND>(platformWindow);
 	VkResult err = VK_SUCCESS;
 
 	// Create the os-specific surface
@@ -220,6 +221,7 @@ void VulkanSwapChain::connect(VkInstance instance, VkPhysicalDevice physicalDevi
 	fpGetSwapchainImagesKHR = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(vkGetDeviceProcAddr(device, "vkGetSwapchainImagesKHR"));
 	fpAcquireNextImageKHR = reinterpret_cast<PFN_vkAcquireNextImageKHR>(vkGetDeviceProcAddr(device, "vkAcquireNextImageKHR"));
 	fpQueuePresentKHR = reinterpret_cast<PFN_vkQueuePresentKHR>(vkGetDeviceProcAddr(device, "vkQueuePresentKHR"));
+	fpAcquireFullScreenExclusiveModeEXT = reinterpret_cast<PFN_vkAcquireFullScreenExclusiveModeEXT>(vkGetDeviceProcAddr(device, "vkAcquireFullScreenExclusiveModeEXT"));
 }
 
 /** 
@@ -229,7 +231,7 @@ void VulkanSwapChain::connect(VkInstance instance, VkPhysicalDevice physicalDevi
 * @param height Pointer to the height of the swapchain (may be adjusted to fit the requirements of the swapchain)
 * @param vsync (Optional) Can be used to force vsync-ed rendering (by using VK_PRESENT_MODE_FIFO_KHR as presentation mode)
 */
-void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool fullscreen)
+void VulkanSwapChain::create(uint32_t* width, uint32_t* height, bool vsync, bool windowedfullscreen, bool exclusivefullscreen)
 {
 	// Store the current swap chain handle so we can use it later on to ease up recreation
 	VkSwapchainKHR oldSwapchain = swapChain;
@@ -248,19 +250,26 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 
 	VkExtent2D swapchainExtent = {};
 	// If width (and height) equals the special value 0xFFFFFFFF, the size of the surface will be set by the swapchain
-	if (surfCaps.currentExtent.width == (uint32_t)-1)
+	if (isSupportFullscreenExclusive && exclusivefullscreen)
 	{
-		// If the surface size is undefined, the size is set to
-		// the size of the images requested.
-		swapchainExtent.width = *width;
-		swapchainExtent.height = *height;
+		swapchainExtent = surfCaps.maxImageExtent;
 	}
 	else
 	{
-		// If the surface size is defined, the swap chain size must match
-		swapchainExtent = surfCaps.currentExtent;
-		*width = surfCaps.currentExtent.width;
-		*height = surfCaps.currentExtent.height;
+		if (surfCaps.currentExtent.width == (uint32_t)-1)
+		{
+			// If the surface size is undefined, the size is set to
+			// the size of the images requested.
+			swapchainExtent.width = *width;
+			swapchainExtent.height = *height;
+		}
+		else
+		{
+			// If the surface size is defined, the swap chain size must match
+			swapchainExtent = surfCaps.currentExtent;
+			*width = surfCaps.currentExtent.width;
+			*height = surfCaps.currentExtent.height;
+		}
 	}
 
 
@@ -272,7 +281,7 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 
 	// If v-sync is not requested, try to find a mailbox mode
 	// It's the lowest latency non-tearing present mode available
-	if (!vsync)
+	if (!vsync && !exclusivefullscreen)
 	{
 		for (size_t i = 0; i < presentModeCount; i++)
 		{
@@ -294,9 +303,9 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 	// SRS - Work around known MoltenVK issue re 2x frame rate when vsync (VK_PRESENT_MODE_FIFO_KHR) enabled
 	struct utsname sysInfo;
 	uname(&sysInfo);
-	// SRS - When vsync is on, use minImageCount when not in fullscreen or when running on Apple Silcon
+	// SRS - When vsync is on, use minImageCount when not in windowedfullscreen or when running on Apple Silcon
 	// This forces swapchain image acquire frame rate to match display vsync frame rate
-	if (vsync && (!fullscreen || strcmp(sysInfo.machine, "arm64") == 0))
+	if (vsync && (!windowedfullscreen || strcmp(sysInfo.machine, "arm64") == 0))
 	{
 		desiredNumberOfSwapchainImages = surfCaps.minImageCount;
 	}
@@ -363,7 +372,35 @@ void VulkanSwapChain::create(uint32_t *width, uint32_t *height, bool vsync, bool
 		swapchainCI.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 	}
 
-	VK_CHECK_RESULT(fpCreateSwapchainKHR(device, &swapchainCI, nullptr, &swapChain));
+	if (isSupportFullscreenExclusive && exclusivefullscreen)
+	{
+		// The following variable has to be attached to the pNext of surface_full_screen_exclusive_info_EXT:
+		VkSurfaceFullScreenExclusiveWin32InfoEXT surface_full_screen_exclusive_Win32_info_EXT{};
+		surface_full_screen_exclusive_Win32_info_EXT.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_WIN32_INFO_EXT;
+		surface_full_screen_exclusive_Win32_info_EXT.pNext = nullptr;
+		surface_full_screen_exclusive_Win32_info_EXT.hmonitor = MonitorFromWindow(GetActiveWindow(), MONITOR_DEFAULTTONEAREST);
+		VkSurfaceFullScreenExclusiveInfoEXT FullScreenInfo{};
+		FullScreenInfo.sType = VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT;
+		FullScreenInfo.pNext = &surface_full_screen_exclusive_Win32_info_EXT;
+		FullScreenInfo.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_APPLICATION_CONTROLLED_EXT;        // Set the fullScreenExclusive stage to default when initializing
+		swapchainCI.pNext = &FullScreenInfo;
+		VkResult result = fpCreateSwapchainKHR(device, &swapchainCI, nullptr, &swapChain);
+		if (result == VK_ERROR_INITIALIZATION_FAILED) 
+		{
+			// Unlink fullscreen
+			std::cout << "Create swapchain failed with Initialization error; removing FullScreen extension..." << std::endl;
+			swapchainCI.pNext = nullptr;
+			VK_CHECK_RESULT(fpCreateSwapchainKHR(device, &swapchainCI, nullptr, &swapChain));
+		}
+		if (result == VK_SUCCESS)
+		{
+			VK_CHECK_RESULT(fpAcquireFullScreenExclusiveModeEXT(device, swapChain));
+		}
+	}
+	else 
+	{
+		VK_CHECK_RESULT(fpCreateSwapchainKHR(device, &swapchainCI, nullptr, &swapChain));
+	}
 
 	// If an existing swap chain is re-created, destroy the old swap chain
 	// This also cleans up all the presentable images
@@ -426,6 +463,13 @@ VkResult VulkanSwapChain::acquireNextImage(VkSemaphore presentCompleteSemaphore,
 	// By setting timeout to UINT64_MAX we will always wait until the next image has been acquired or an actual error is thrown
 	// With that we don't have to handle VK_NOT_READY
 	return fpAcquireNextImageKHR(device, swapChain, UINT64_MAX, presentCompleteSemaphore, (VkFence)nullptr, imageIndex);
+	/*VkResult result;
+	result = fpAcquireNextImageKHR(device, swapChain, UINT64_MAX, presentCompleteSemaphore, (VkFence)nullptr, imageIndex);
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT)
+	{
+		lost = true;
+	}
+	return result;*/
 }
 
 /**
